@@ -1,0 +1,15 @@
+[project]
+name = "crm-demo"
+version = "1.0.0"
+description = "Retail CRM API demo built around secure backend practices (OWASP API Top 10)"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Razim Kudaybergenov" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]

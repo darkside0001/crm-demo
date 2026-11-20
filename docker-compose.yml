@@ -1,0 +1,38 @@
+# Local demo: `cp .env.example .env`, fill in the values, then `docker compose up --build`.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: crm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d crm"]
+      interval: 5s
+      retries: 10
+    # No published port: only the api container can reach the database.
+    networks: [backend]
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      CRM_DATABASE_URL: postgresql+psycopg://crm:${POSTGRES_PASSWORD}@db:5432/crm
+    depends_on:
+      db:
+        condition: service_healthy
+    # Bound to localhost; put a TLS reverse proxy (Caddy, nginx) in front for anything public.
+    ports: ["127.0.0.1:8000:8000"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
+volumes:
+  pgdata:
+
+networks:
+  backend:
