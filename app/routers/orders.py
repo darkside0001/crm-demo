@@ -71,6 +71,18 @@ def create_order(
     if db.get(Customer, body.customer_id) is None:
         raise AppError(404, "Customer not found")
 
+    # Unpaid orders reserve stock. Without a cap one seller account could hold the
+    # whole catalogue in "new" orders that only a manager can cancel.
+    settings = request.app.state.settings
+    if user.role == Role.seller:
+        open_orders = db.scalar(
+            select(func.count()).select_from(Order).where(
+                Order.seller_id == user.id, Order.status == OrderStatus.new
+            )
+        )
+        if open_orders >= settings.max_open_orders_per_seller:
+            raise AppError(403, "Too many unpaid orders; ask a manager to review them")
+
     quantities = Counter()
     for item in body.items:
         quantities[item.product_id] += item.quantity

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.errors import AppError
-from app.models import Role, User
+from app.models import RevokedAccessToken, Role, User
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -27,6 +27,7 @@ def _unauthorized() -> AppError:
 
 
 def current_user(
+    request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -40,6 +41,10 @@ def current_user(
         user_id = int(payload["sub"])
     except (jwt.InvalidTokenError, KeyError, ValueError):
         raise _unauthorized()
+
+    if db.get(RevokedAccessToken, payload["jti"]) is not None:  # logged out
+        raise _unauthorized()
+    request.state.token = payload
 
     user = db.get(User, user_id)
     # The role and version are re-read from the database on every request, so a

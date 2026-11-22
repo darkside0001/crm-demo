@@ -23,8 +23,13 @@ class Settings(BaseSettings):
     refresh_token_days: int = Field(default=7, ge=1, le=30)
 
     # Brute-force protection
-    login_max_failures: int = 5
-    login_lockout_minutes: int = 15
+    login_max_failures: int = 5  # per account *and* client IP, within the window
+    login_lockout_minutes: int = 15  # the window, and how long a source stays blocked
+    # Failures from all IPs together that lock the account itself (distributed attack).
+    login_account_lock_failures: int = 50
+
+    # Business limits (OWASP API6): unpaid orders one seller may keep open.
+    max_open_orders_per_seller: int = 10
 
     # Rate limiting (requests per window, per client IP)
     rate_limit_enabled: bool = True
