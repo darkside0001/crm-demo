@@ -49,7 +49,8 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Bumped on password change / deactivation: invalidates every issued access token.
     token_version: Mapped[int] = mapped_column(Integer, default=0)
-    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)  # unused since auth_failures, kept for old databases
+    # Account-wide lock, only for distributed attacks (many failures from many IPs).
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -66,6 +67,33 @@ class RefreshToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuthFailure(Base):
+    """One row per failed (or in-progress) password check, per user and client IP.
+
+    Replaces the old per-account counter, which (a) let anyone lock any account
+    with five wrong passwords and (b) lost updates under concurrent requests.
+    A row is written and committed *before* the password is verified, so
+    parallel guesses are counted too.
+    """
+
+    __tablename__ = "auth_failures"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    ip: Mapped[str] = mapped_column(String(45), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # login | password_change
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class RevokedAccessToken(Base):
+    """Access tokens ended by logout before they expire (denylist by jti)."""
+
+    __tablename__ = "revoked_access_tokens"
+
+    jti: Mapped[str] = mapped_column(String(32), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class Product(Base):

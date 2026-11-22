@@ -4,6 +4,7 @@ import logging
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app import errors, middleware
 from app.config import Settings, get_settings
@@ -28,6 +29,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.db = Database(settings.database_url)
     app.state.db.create_all()
     app.state.limiter = middleware.RateLimiter()
+
+    # Content-Length is checked up front in middleware.install, but a chunked request has
+    # no Content-Length. This counts the bytes actually received and stops at the limit.
+    # Added first so it sits inside the hardening middleware and its 413 gets the same
+    # headers and error shape as every other response.
+    app.add_middleware(RequestBodyLimitMiddleware, max_body_size=settings.max_body_bytes)
 
     if settings.cors_origins:
         app.add_middleware(

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app import audit
 from app.deps import MANAGERS, STAFF, get_db, require_roles
 from app.errors import AppError
-from app.models import Customer, Role, User
+from app.models import Customer, Order, Role, User
 from app.schemas import CustomerCreate, CustomerOut, CustomerUpdate, Page
 from app.search import like_pattern
 
@@ -32,6 +32,15 @@ def present(customer: Customer, viewer: User, masked: bool) -> CustomerOut:
     return out
 
 
+def has_relationship(db: Session, viewer: User, customer: Customer) -> bool:
+    """A seller sees full contact details only for customers they work with."""
+    if viewer.role != Role.seller or customer.created_by_id == viewer.id:
+        return True
+    return db.scalar(
+        select(Order.id).where(Order.customer_id == customer.id, Order.seller_id == viewer.id).limit(1)
+    ) is not None
+
+
 @router.get("", response_model=Page[CustomerOut])
 def list_customers(
     q: str | None = Query(None, max_length=60),
@@ -43,9 +52,14 @@ def list_customers(
     stmt = select(Customer)
     if q:
         pattern = like_pattern(q)
-        stmt = stmt.where(
-            or_(Customer.full_name.ilike(pattern, escape="\\"), Customer.phone.like(pattern, escape="\\"))
-        )
+        if user.role == Role.seller:
+            # Sellers see masked phones, so a substring search on the phone column would let
+            # them rebuild the hidden digits one query at a time. They may only look a
+            # customer up by the exact number the customer gives them.
+            phone_match = Customer.phone == q.strip()
+        else:
+            phone_match = Customer.phone.like(pattern, escape="\\")
+        stmt = stmt.where(or_(Customer.full_name.ilike(pattern, escape="\\"), phone_match))
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     rows = db.scalars(stmt.order_by(Customer.id).limit(limit).offset(offset)).all()
     return Page(items=[present(c, user, masked=True) for c in rows], total=total, limit=limit, offset=offset)
@@ -64,7 +78,7 @@ def get_customer(
     # Opening a full customer card is personal-data access: keep a record of who looked.
     audit.record(db, request, "customer_viewed", actor_id=user.id, entity="customer", entity_id=customer.id)
     db.commit()
-    return present(customer, user, masked=False)
+    return present(customer, user, masked=not has_relationship(db, user, customer))
 
 
 @router.post("", response_model=CustomerOut, status_code=201)

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 
-from app.models import AuditLog, User
+from app.models import AuditLog, AuthFailure, User
 from tests.conftest import ADMIN, PASSWORD, SELLER
 
 
@@ -36,25 +36,41 @@ def test_unknown_user_and_wrong_password_look_identical(ctx):
     assert a.json()["error"]["message"] == b.json()["error"]["message"]
 
 
-def test_account_locks_after_repeated_failures(ctx):
+def test_source_is_blocked_after_repeated_failures(ctx):
     for _ in range(5):
         assert ctx.login(SELLER, "wrong-password-123").status_code == 401
-    # Correct password is refused while locked, with the same generic message.
+    # The same source now gets the generic 401 even with the right password.
     r = ctx.login(SELLER)
     assert r.status_code == 401
     with ctx.session() as db:
         actions = [a.action for a in db.query(AuditLog).all()]
-    assert "account_locked" in actions and "login_blocked" in actions
+    assert "source_blocked" in actions and "login_blocked" in actions
 
 
-def test_lock_expires(ctx):
+def test_block_expires(ctx):
     for _ in range(5):
         ctx.login(SELLER, "wrong-password-123")
     with ctx.session() as db:
-        user = db.query(User).filter_by(email=SELLER).one()
-        user.locked_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+        for row in db.query(AuthFailure).all():
+            row.at = datetime.now(timezone.utc) - timedelta(minutes=16)
         db.commit()
     assert ctx.login(SELLER).status_code == 200
+
+
+def test_account_locks_under_distributed_guessing(make_ctx):
+    ctx = make_ctx(trust_proxy=True, login_account_lock_failures=12)
+    for i in range(12):
+        ip = f"203.0.113.{i // 4 + 1}"  # 3 sources, 4 tries each: none hits the per-source limit
+        r = ctx.client.post("/api/v1/auth/login", json={"email": SELLER, "password": "wrong-password-123"},
+                            headers={"X-Forwarded-For": ip})
+        assert r.status_code == 401
+    r = ctx.client.post("/api/v1/auth/login", json={"email": SELLER, "password": PASSWORD},
+                        headers={"X-Forwarded-For": "192.0.2.20"})
+    assert r.status_code == 401
+    with ctx.session() as db:
+        user = db.query(User).filter_by(email=SELLER).one()
+        assert user.locked_until is not None
+        assert "account_locked" in [a.action for a in db.query(AuditLog).all()]
 
 
 def test_disabled_user_cannot_log_in(ctx):
